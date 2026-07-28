@@ -18,6 +18,13 @@ KEY_METRIC_IDS = {
     "당기순이익": "ifrs-full_ProfitLoss",
 }
 
+# account_id가 "-표준계정코드 미사용-"으로 찍히는 경우(특히 작은/신생 상장사)를 대비한 계정명 대체 후보
+KEY_METRIC_FALLBACK_NAMES = {
+    "매출액": ["매출액", "영업수익", "수익(매출액)"],
+    "영업이익": ["영업이익", "영업이익(손실)", "영업손실", "영업이익(손실율)"],
+    "당기순이익": ["당기순이익", "당기순이익(손실)", "분기순이익", "분기순손실", "당기순손실", "반기순이익", "반기순손실"],
+}
+
 
 def amount_to_number(s: str | None) -> float | None:
     if s is None or s == "":
@@ -121,7 +128,9 @@ def build_key_metrics(items: pd.DataFrame, fs_div: str) -> pd.DataFrame:
 
     rows = {}
     for label, account_id in KEY_METRIC_IDS.items():
-        match = sub[sub["account_id"] == account_id]
+        fallback_names = KEY_METRIC_FALLBACK_NAMES.get(label, [])
+        mask = (sub["account_id"] == account_id) | (sub["account_nm"].isin(fallback_names))
+        match = sub[mask]
         if not match.empty:
             rows[label] = match.groupby("기간")["금액"].first()
     if not rows:
@@ -233,7 +242,9 @@ def build_quarterly_key_metrics(items: pd.DataFrame, fs_div: str) -> pd.DataFram
 
     rows: dict[str, dict[str, float]] = {}
     for label, account_id in KEY_METRIC_IDS.items():
-        match = sub[sub["account_id"] == account_id]
+        fallback_names = KEY_METRIC_FALLBACK_NAMES.get(label, [])
+        mask = (sub["account_id"] == account_id) | (sub["account_nm"].isin(fallback_names))
+        match = sub[mask]
         if match.empty:
             continue
         cum = match.groupby(["bsns_year", "reprt_name"])["금액"].first()

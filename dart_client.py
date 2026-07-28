@@ -31,7 +31,8 @@ FS_DIVISIONS = {
 }
 
 # 관심 기업 (필요하면 여기에 더 추가)
-WATCHLIST = ["삼성전자", "SK하이닉스"]
+# 참고: DART 등록명 기준. LS ELECTRIC은 DART에 "엘에스일렉트릭"(한글 표기)으로 등록되어 있음
+WATCHLIST = ["삼성전자", "SK하이닉스", "리브스메드", "리센스메디컬", "엘에스일렉트릭"]
 
 
 class DartApiError(RuntimeError):
