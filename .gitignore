@@ -1,0 +1,6 @@
+.env
+.streamlit/secrets.toml
+data/corpCode.xml
+__pycache__/
+*.pyc
+.venv/

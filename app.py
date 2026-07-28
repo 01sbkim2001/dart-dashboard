@@ -1,0 +1,309 @@
+"""DART 재무제표 raw data 대시보드 (Streamlit).
+
+삼성전자 / SK하이닉스(또는 직접 검색한 회사)의 재무제표를 DART Open API에서 가져와
+로컬 SQLite에 원본 그대로 누적 저장하고, 실제 재무제표 표/차트로 확인한다.
+"""
+from __future__ import annotations
+
+import os
+
+import pandas as pd
+import plotly.express as px
+import streamlit as st
+from dotenv import load_dotenv
+
+import db
+from dart_client import DartApiError, DartClient, FS_DIVISIONS, REPORT_CODES, WATCHLIST
+from statement_utils import (
+    CUMULATIVE_SJ_NM,
+    UNIT_FACTORS,
+    amount_to_number,
+    build_key_metrics,
+    build_quarterly_key_metrics,
+    build_quarterly_pivot,
+    build_statement_pivot,
+    format_for_display,
+    scale_for_chart,
+)
+
+load_dotenv()
+db.init_db()
+
+st.set_page_config(page_title="DART 재무제표 대시보드", layout="wide")
+st.title("📊 DART 재무제표 대시보드")
+
+
+def get_secret(name: str) -> str:
+    """Streamlit Cloud의 st.secrets를 우선 쓰고, 로컬 .env(os.environ)로 대체한다."""
+    try:
+        return str(st.secrets[name])
+    except Exception:
+        return os.getenv(name, "")
+
+
+ADMIN_PASSWORD = get_secret("ADMIN_PASSWORD").strip()
+
+
+def is_admin() -> bool:
+    # ADMIN_PASSWORD가 설정 안 된 로컬 개발 환경에서는 전체 허용
+    if not ADMIN_PASSWORD:
+        return True
+    return bool(st.session_state.get("is_admin", False))
+
+
+@st.cache_resource
+def get_client() -> DartClient | None:
+    api_key = get_secret("DART_API_KEY").strip()
+    if not api_key:
+        return None
+    return DartClient(api_key)
+
+
+client = get_client()
+
+# ---------------- 사이드바: 조회 및 저장 (관리자 전용) ----------------
+with st.sidebar:
+    if ADMIN_PASSWORD and not is_admin():
+        st.subheader("🔒 관리자 로그인")
+        pw = st.text_input("비밀번호", type="password", key="admin_pw_input")
+        if st.button("로그인"):
+            if pw == ADMIN_PASSWORD:
+                st.session_state["is_admin"] = True
+                st.rerun()
+            else:
+                st.error("비밀번호가 틀렸습니다.")
+        st.divider()
+        st.caption("이 대시보드는 읽기 전용으로 공개되어 있습니다. 데이터 수집/삭제는 관리자만 가능합니다.")
+    else:
+        if ADMIN_PASSWORD:
+            st.success("🔓 관리자 모드")
+        st.header("데이터 가져오기")
+
+        if client is None:
+            st.error("DART_API_KEY가 설정되지 않았습니다. secrets 또는 .env 파일에 키를 넣어주세요.")
+
+        corp_choice = st.selectbox("회사", WATCHLIST + ["직접 검색"])
+        if corp_choice == "직접 검색":
+            corp_name = st.text_input("회사명 (DART 등록명과 정확히 일치해야 함)", "")
+        else:
+            corp_name = corp_choice
+
+        years = st.multiselect(
+            "사업연도",
+            [str(y) for y in range(2015, 2028)],
+            default=["2026", "2025", "2024"],
+        )
+        reprt_code = st.selectbox(
+            "보고서 종류", list(REPORT_CODES.keys()), format_func=lambda k: REPORT_CODES[k], index=3
+        )
+        fs_div_input = st.selectbox("재무제표 구분", list(FS_DIVISIONS.keys()), format_func=lambda k: FS_DIVISIONS[k])
+
+        fetch_clicked = st.button("DART에서 가져와 저장", type="primary", disabled=(client is None))
+
+        if fetch_clicked:
+            if not corp_name:
+                st.warning("회사명을 입력해주세요.")
+            elif not years:
+                st.warning("사업연도를 하나 이상 선택해주세요.")
+            else:
+                try:
+                    corp = client.find_corp(corp_name)
+                    progress = st.progress(0.0)
+                    total_rows = 0
+                    for i, y in enumerate(years):
+                        data = client.get_financial_statement(corp.corp_code, y, reprt_code, fs_div_input)
+                        db.save_fetch(
+                            corp.corp_code,
+                            corp_name,
+                            corp.stock_code,
+                            y,
+                            reprt_code,
+                            REPORT_CODES[reprt_code],
+                            fs_div_input,
+                            data,
+                        )
+                        total_rows += len(data.get("list", []))
+                        progress.progress((i + 1) / len(years))
+                    st.success(f"{corp_name} {', '.join(years)}년 데이터 저장 완료 (총 {total_rows}개 계정과목)")
+                    st.cache_data.clear()
+                except DartApiError as e:
+                    st.error(f"DART API 오류: {e}")
+                except Exception as e:
+                    st.error(f"오류 발생: {e}")
+
+        st.divider()
+        st.caption("보유 중인 API 키가 없다면 opendart.fss.or.kr 에서 무료로 발급받을 수 있습니다.")
+
+
+# ---------------- 메인 ----------------
+tab_statement, tab_trend, tab_manage = st.tabs(["📑 재무제표", "📈 추이 차트", "🗂 데이터 관리"])
+
+with tab_statement:
+    col_a, col_b, col_d = st.columns([2, 1.5, 1])
+    with col_a:
+        stmt_corp = st.selectbox("회사", WATCHLIST, key="stmt_corp")
+
+    items = db.get_all_line_items(stmt_corp)
+
+    if items.empty:
+        st.info("이 회사의 저장된 데이터가 없습니다. 왼쪽 사이드바에서 먼저 데이터를 가져와주세요.")
+    else:
+        available_fs = [f for f in FS_DIVISIONS if f in items["fs_div"].unique()]
+        with col_b:
+            stmt_fs_div = st.selectbox(
+                "재무제표 구분", available_fs, format_func=lambda k: FS_DIVISIONS[k], key="stmt_fs_div"
+            )
+        with col_d:
+            unit = st.selectbox("단위", list(UNIT_FACTORS.keys()), key="stmt_unit")
+
+        # ---- 핵심 지표 (매출액 / 영업이익 / 당기순이익) 요약 ----
+        key_metrics = build_key_metrics(items, stmt_fs_div)
+        if not key_metrics.empty:
+            st.subheader(f"💰 핵심 지표 (단위: {unit})")
+            st.dataframe(format_for_display(key_metrics, unit), use_container_width=True)
+
+            chart_df = key_metrics.reset_index().melt(id_vars="index", var_name="기간", value_name="금액")
+            chart_df = chart_df.rename(columns={"index": "지표"})
+            chart_df, chart_unit = scale_for_chart(chart_df, "금액")
+            fig = px.bar(
+                chart_df, x="기간", y="금액", color="지표", barmode="group",
+                title=f"{stmt_corp} 매출액 · 영업이익 · 당기순이익 추이 (단위: {chart_unit})",
+            )
+            fig.update_yaxes(title=f"금액 ({chart_unit})")
+            st.plotly_chart(fig, use_container_width=True)
+            st.divider()
+
+        # ---- 분기별 단독 실적 (1~4분기, 연간에서 1~3분기를 뺀 4분기 포함) ----
+        quarterly_key_metrics = build_quarterly_key_metrics(items, stmt_fs_div)
+        if not quarterly_key_metrics.empty:
+            st.subheader(f"📅 분기별 단독 실적 (단위: {unit})")
+            st.caption(
+                "1·2·3분기는 각 분기보고서 값 그대로, 4분기는 사업보고서(연간) 값에서 1·2·3분기 실적을 뺀 값입니다 "
+                "(4분기만 별도로 공시되지 않기 때문)."
+            )
+            st.dataframe(format_for_display(quarterly_key_metrics, unit), use_container_width=True)
+
+            q_chart_df = quarterly_key_metrics.reset_index().melt(id_vars="index", var_name="분기", value_name="금액")
+            q_chart_df = q_chart_df.rename(columns={"index": "지표"})
+            q_chart_df, q_chart_unit = scale_for_chart(q_chart_df, "금액")
+            q_fig = px.bar(
+                q_chart_df, x="분기", y="금액", color="지표", barmode="group",
+                title=f"{stmt_corp} 분기별 매출액 · 영업이익 · 당기순이익 (단위: {q_chart_unit})",
+            )
+            q_fig.update_yaxes(title=f"금액 ({q_chart_unit})")
+            st.plotly_chart(q_fig, use_container_width=True)
+            st.divider()
+
+        # ---- 재무제표 종류별 전체 표 (재무상태표 / 손익계산서 / 현금흐름표 등 전부) ----
+        available_sj = items.loc[items["fs_div"] == stmt_fs_div, "sj_nm"].dropna().unique().tolist()
+        preferred_order = ["재무상태표", "손익계산서", "포괄손익계산서", "현금흐름표", "자본변동표"]
+        available_sj = sorted(available_sj, key=lambda s: preferred_order.index(s) if s in preferred_order else 99)
+
+        st.subheader(f"📄 {stmt_corp} · {FS_DIVISIONS[stmt_fs_div]} 전체 재무제표 (단위: {unit})")
+        FLOW_SJ_NM = {"손익계산서", "포괄손익계산서", "현금흐름표"}
+        for sj_nm in available_sj:
+            pivot = build_statement_pivot(items, stmt_fs_div, sj_nm)
+            if pivot.empty:
+                continue
+            with st.expander(f"{sj_nm} ({len(pivot)}개 계정과목)", expanded=True):
+                st.dataframe(format_for_display(pivot, unit), use_container_width=True)
+                st.download_button(
+                    "CSV로 내보내기 (원 단위)",
+                    pivot.to_csv().encode("utf-8-sig"),
+                    file_name=f"{stmt_corp}_{sj_nm}.csv",
+                    mime="text/csv",
+                    key=f"dl_{sj_nm}",
+                )
+
+                if sj_nm in FLOW_SJ_NM:
+                    q_pivot = build_quarterly_pivot(items, stmt_fs_div, sj_nm)
+                    if not q_pivot.empty:
+                        cum_note = " (누적 보고서에서 직전 분기를 뺀 값)" if sj_nm in CUMULATIVE_SJ_NM else ""
+                        st.markdown(f"**분기별 단독 실적{cum_note}**")
+                        st.dataframe(format_for_display(q_pivot, unit), use_container_width=True)
+                        st.download_button(
+                            "분기별 표 CSV로 내보내기 (원 단위)",
+                            q_pivot.to_csv().encode("utf-8-sig"),
+                            file_name=f"{stmt_corp}_{sj_nm}_분기별.csv",
+                            mime="text/csv",
+                            key=f"dl_q_{sj_nm}",
+                        )
+
+with tab_trend:
+    trend_corp = st.selectbox("회사", WATCHLIST, key="trend_corp")
+    all_items = db.get_all_line_items(trend_corp)
+
+    if all_items.empty:
+        st.info("이 회사의 저장된 데이터가 없습니다.")
+    else:
+        account_options = sorted(all_items["account_nm"].dropna().unique().tolist())
+        default_idx = account_options.index("매출액") if "매출액" in account_options else 0
+        account = st.selectbox("계정과목", account_options, index=default_idx)
+
+        subset = all_items[all_items["account_nm"] == account].copy()
+        subset["금액"] = subset["thstrm_amount"].apply(amount_to_number)
+        subset = subset.sort_values(["bsns_year", "reprt_name"])
+        subset["연도/보고서"] = subset["bsns_year"] + " " + subset["reprt_name"]
+
+        chart_subset, trend_unit = scale_for_chart(subset, "금액")
+        fig = px.bar(
+            chart_subset, x="연도/보고서", y="금액", color="sj_nm",
+            title=f"{trend_corp} - {account} (단위: {trend_unit})",
+        )
+        fig.update_yaxes(title=f"금액 ({trend_unit})")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(
+            subset[["bsns_year", "reprt_name", "sj_nm", "account_nm", "금액"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+with tab_manage:
+    st.caption("가져온 원본 데이터(raw data) 자체를 조회/삭제/내보내기 하는 관리 화면입니다.")
+    filter_corp = st.selectbox("회사 필터", ["전체"] + WATCHLIST, key="browse_filter")
+    fetches = db.list_fetches(None if filter_corp == "전체" else filter_corp)
+
+    if fetches.empty:
+        st.info("아직 저장된 데이터가 없습니다.")
+    else:
+        st.dataframe(fetches, use_container_width=True, hide_index=True)
+
+        selected_id = st.selectbox(
+            "상세히 볼 fetch 선택",
+            fetches["id"],
+            format_func=lambda i: f"#{i} - "
+            + fetches.loc[fetches['id'] == i, 'corp_name'].values[0]
+            + " "
+            + fetches.loc[fetches['id'] == i, 'bsns_year'].values[0]
+            + " "
+            + fetches.loc[fetches['id'] == i, 'reprt_name'].values[0],
+        )
+
+        items_view = db.get_line_items(int(selected_id))
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button(
+                "이 fetch 전체 라인아이템 CSV로 내보내기",
+                items_view.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"fetch_{int(selected_id)}.csv",
+                mime="text/csv",
+            )
+        with col2:
+            if is_admin():
+                if st.button("이 기록 삭제", key="delete_btn"):
+                    db.delete_fetch(int(selected_id))
+                    st.success("삭제했습니다. 새로고침해주세요.")
+                    st.cache_data.clear()
+            else:
+                st.caption("삭제는 관리자만 가능합니다.")
+
+        st.dataframe(items_view, use_container_width=True, hide_index=True)
+
+        with st.expander("원본 JSON 보기"):
+            conn = db.get_connection()
+            raw_json = pd.read_sql_query(
+                "SELECT raw_json FROM fetch_log WHERE id = ?", conn, params=(int(selected_id),)
+            )
+            conn.close()
+            if not raw_json.empty:
+                st.json(raw_json.iloc[0]["raw_json"])
