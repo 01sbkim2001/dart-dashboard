@@ -61,6 +61,25 @@ def get_client() -> DartClient | None:
 
 client = get_client()
 
+
+def period_picker(periods: list[str], key_prefix: str) -> list[str]:
+    """기간(연도/보고서 등) 체크박스 선택기를 그려주고, 체크된 기간만 리스트로 반환한다."""
+    col_all, col_none = st.columns(2)
+    with col_all:
+        if st.button("전체 선택", key=f"{key_prefix}_selall", use_container_width=True):
+            for p in periods:
+                st.session_state[f"{key_prefix}_{p}"] = True
+    with col_none:
+        if st.button("전체 해제", key=f"{key_prefix}_deselall", use_container_width=True):
+            for p in periods:
+                st.session_state[f"{key_prefix}_{p}"] = False
+
+    selected = []
+    for p in periods:
+        if st.checkbox(p, value=True, key=f"{key_prefix}_{p}"):
+            selected.append(p)
+    return selected
+
 # ---------------- 사이드바: 조회 및 저장 (관리자 전용) ----------------
 with st.sidebar:
     if ADMIN_PASSWORD and not is_admin():
@@ -160,17 +179,28 @@ with tab_statement:
         key_metrics = build_key_metrics(items, stmt_fs_div)
         if not key_metrics.empty:
             st.subheader(f"💰 핵심 지표 (단위: {unit})")
-            st.dataframe(format_for_display(key_metrics, unit), use_container_width=True)
 
-            chart_df = key_metrics.reset_index().melt(id_vars="index", var_name="기간", value_name="금액")
-            chart_df = chart_df.rename(columns={"index": "지표"})
-            chart_df, chart_unit = scale_for_chart(chart_df, "금액")
-            fig = px.bar(
-                chart_df, x="기간", y="금액", color="지표", barmode="group",
-                title=f"{stmt_corp} 매출액 · 영업이익 · 당기순이익 추이 (단위: {chart_unit})",
-            )
-            fig.update_yaxes(title=f"금액 ({chart_unit})")
-            st.plotly_chart(fig, use_container_width=True)
+            col_chart, col_pick = st.columns([4, 1])
+            with col_pick:
+                st.caption("비교할 기간 선택")
+                km_periods = period_picker(key_metrics.columns.tolist(), key_prefix="km")
+
+            with col_chart:
+                if not km_periods:
+                    st.info("왼쪽에서 비교할 기간을 하나 이상 선택해주세요.")
+                else:
+                    km_selected = key_metrics[km_periods]
+                    st.dataframe(format_for_display(km_selected, unit), use_container_width=True)
+
+                    chart_df = km_selected.reset_index().melt(id_vars="index", var_name="기간", value_name="금액")
+                    chart_df = chart_df.rename(columns={"index": "지표"})
+                    chart_df, chart_unit = scale_for_chart(chart_df, "금액")
+                    fig = px.bar(
+                        chart_df, x="기간", y="금액", color="지표", barmode="group",
+                        title=f"{stmt_corp} 매출액 · 영업이익 · 당기순이익 추이 (단위: {chart_unit})",
+                    )
+                    fig.update_yaxes(title=f"금액 ({chart_unit})")
+                    st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
         # ---- 분기별 단독 실적 (1~4분기, 연간에서 1~3분기를 뺀 4분기 포함) ----
@@ -181,17 +211,28 @@ with tab_statement:
                 "1·2·3분기는 각 분기보고서 값 그대로, 4분기는 사업보고서(연간) 값에서 1·2·3분기 실적을 뺀 값입니다 "
                 "(4분기만 별도로 공시되지 않기 때문)."
             )
-            st.dataframe(format_for_display(quarterly_key_metrics, unit), use_container_width=True)
 
-            q_chart_df = quarterly_key_metrics.reset_index().melt(id_vars="index", var_name="분기", value_name="금액")
-            q_chart_df = q_chart_df.rename(columns={"index": "지표"})
-            q_chart_df, q_chart_unit = scale_for_chart(q_chart_df, "금액")
-            q_fig = px.bar(
-                q_chart_df, x="분기", y="금액", color="지표", barmode="group",
-                title=f"{stmt_corp} 분기별 매출액 · 영업이익 · 당기순이익 (단위: {q_chart_unit})",
-            )
-            q_fig.update_yaxes(title=f"금액 ({q_chart_unit})")
-            st.plotly_chart(q_fig, use_container_width=True)
+            col_qchart, col_qpick = st.columns([4, 1])
+            with col_qpick:
+                st.caption("비교할 분기 선택")
+                qkm_periods = period_picker(quarterly_key_metrics.columns.tolist(), key_prefix="qkm")
+
+            with col_qchart:
+                if not qkm_periods:
+                    st.info("왼쪽에서 비교할 분기를 하나 이상 선택해주세요.")
+                else:
+                    qkm_selected = quarterly_key_metrics[qkm_periods]
+                    st.dataframe(format_for_display(qkm_selected, unit), use_container_width=True)
+
+                    q_chart_df = qkm_selected.reset_index().melt(id_vars="index", var_name="분기", value_name="금액")
+                    q_chart_df = q_chart_df.rename(columns={"index": "지표"})
+                    q_chart_df, q_chart_unit = scale_for_chart(q_chart_df, "금액")
+                    q_fig = px.bar(
+                        q_chart_df, x="분기", y="금액", color="지표", barmode="group",
+                        title=f"{stmt_corp} 분기별 매출액 · 영업이익 · 당기순이익 (단위: {q_chart_unit})",
+                    )
+                    q_fig.update_yaxes(title=f"금액 ({q_chart_unit})")
+                    st.plotly_chart(q_fig, use_container_width=True)
             st.divider()
 
         # ---- 재무제표 종류별 전체 표 (재무상태표 / 손익계산서 / 현금흐름표 등 전부) ----
@@ -245,18 +286,30 @@ with tab_trend:
         subset = subset.sort_values(["bsns_year", "reprt_name"])
         subset["연도/보고서"] = subset["bsns_year"] + " " + subset["reprt_name"]
 
-        chart_subset, trend_unit = scale_for_chart(subset, "금액")
-        fig = px.bar(
-            chart_subset, x="연도/보고서", y="금액", color="sj_nm",
-            title=f"{trend_corp} - {account} (단위: {trend_unit})",
-        )
-        fig.update_yaxes(title=f"금액 ({trend_unit})")
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(
-            subset[["bsns_year", "reprt_name", "sj_nm", "account_nm", "금액"]],
-            use_container_width=True,
-            hide_index=True,
-        )
+        trend_periods_all = subset["연도/보고서"].drop_duplicates().tolist()
+
+        col_tchart, col_tpick = st.columns([4, 1])
+        with col_tpick:
+            st.caption("비교할 기간 선택")
+            trend_periods = period_picker(trend_periods_all, key_prefix=f"trend_{trend_corp}")
+
+        with col_tchart:
+            if not trend_periods:
+                st.info("오른쪽에서 비교할 기간을 하나 이상 선택해주세요.")
+            else:
+                filtered_subset = subset[subset["연도/보고서"].isin(trend_periods)]
+                chart_subset, trend_unit = scale_for_chart(filtered_subset, "금액")
+                fig = px.bar(
+                    chart_subset, x="연도/보고서", y="금액", color="sj_nm",
+                    title=f"{trend_corp} - {account} (단위: {trend_unit})",
+                )
+                fig.update_yaxes(title=f"금액 ({trend_unit})")
+                st.plotly_chart(fig, use_container_width=True)
+                st.dataframe(
+                    filtered_subset[["bsns_year", "reprt_name", "sj_nm", "account_nm", "금액"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
 with tab_manage:
     st.caption("가져온 원본 데이터(raw data) 자체를 조회/삭제/내보내기 하는 관리 화면입니다.")
