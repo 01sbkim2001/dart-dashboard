@@ -258,6 +258,14 @@ def _cumulative_quarter_columns(cum: dict[str, float], years: list[str]) -> dict
     return row
 
 
+def quarter_value_for_account(amounts: dict[tuple[str, str], float], years: list[str], cumulative: bool) -> dict[str, float]:
+    """단일 계정과목의 (연도, 보고서명) -> 금액 dict를 받아 분기별 라벨(예: "2025 4분기") -> 금액 dict를 반환한다.
+    cumulative=True면 누적형(현금흐름표류), False면 단독형(손익계산서류) 계산 방식을 쓴다."""
+    if cumulative:
+        return _cumulative_quarter_columns(amounts, years)
+    return _standalone_quarter_columns(amounts, years)
+
+
 def _sort_quarter_columns(columns) -> list[str]:
     # "2025 4분기" -> ("2025", "4분기") 로 연도desc, 분기desc 정렬
     return sorted(columns, key=lambda c: tuple(c.rsplit(" ", 1)), reverse=True)

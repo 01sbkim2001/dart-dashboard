@@ -26,8 +26,12 @@ from statement_utils import (
     build_statement_pivot,
     expand_with_audit_history,
     format_for_display,
+    quarter_value_for_account,
     scale_for_chart,
 )
+
+
+FLOW_SJ_NM = {"손익계산서", "포괄손익계산서", "현금흐름표"}
 
 
 def format_listing_date(raw: str | None) -> str | None:
@@ -290,7 +294,6 @@ with tab_statement:
         available_sj = sorted(available_sj, key=lambda s: preferred_order.index(s) if s in preferred_order else 99)
 
         st.subheader(f"📄 {stmt_corp} · {FS_DIVISIONS[stmt_fs_div]} 전체 재무제표 (단위: {unit})")
-        FLOW_SJ_NM = {"손익계산서", "포괄손익계산서", "현금흐름표"}
         for sj_nm in available_sj:
             pivot = build_statement_pivot(items, stmt_fs_div, sj_nm)
             if pivot.empty:
@@ -341,6 +344,27 @@ with tab_trend:
         subset["금액"] = subset["thstrm_amount"].apply(amount_to_number)
         subset = subset.sort_values(["bsns_year", "reprt_name"])
         subset["연도/보고서"] = subset["bsns_year"] + " " + subset["reprt_name"]
+
+        # ---- 4분기(계산값): 사업보고서(연간)에서 1·2·3분기를 뺀 값을 별도 옵션으로 추가 ----
+        q4_rows = []
+        for (fs_val, sj_val), grp in subset.groupby(["fs_div", "sj_nm"]):
+            if sj_val not in FLOW_SJ_NM:
+                continue
+            amounts = {(r["bsns_year"], r["reprt_name"]): r["금액"] for _, r in grp.iterrows()}
+            years_here = sorted(grp["bsns_year"].unique())
+            q_result = quarter_value_for_account(amounts, years_here, cumulative=sj_val in CUMULATIVE_SJ_NM)
+            for period_label, val in q_result.items():
+                if not period_label.endswith("4분기") or pd.isna(val):
+                    continue
+                year = period_label.split(" ")[0]
+                q4_rows.append({
+                    "fs_div": fs_val, "sj_nm": sj_val, "account_nm": account,
+                    "bsns_year": year, "reprt_name": "4분기(계산)", "금액": val,
+                    "연도/보고서": f"{year} 4분기(계산)",
+                })
+        if q4_rows:
+            subset = pd.concat([subset, pd.DataFrame(q4_rows)], ignore_index=True)
+            subset = subset.sort_values(["bsns_year", "reprt_name"])
 
         trend_periods_all = subset["연도/보고서"].drop_duplicates().tolist()
 
