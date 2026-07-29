@@ -17,7 +17,9 @@ from dart_client import DartApiError, DartClient, FS_DIVISIONS, REPORT_CODES, WA
 from statement_utils import (
     CUMULATIVE_SJ_NM,
     UNIT_FACTORS,
+    add_derived_ratios,
     amount_to_number,
+    build_comparison_table,
     build_key_metrics,
     build_quarterly_key_metrics,
     build_quarterly_pivot,
@@ -186,7 +188,9 @@ with st.sidebar:
 
 
 # ---------------- 메인 ----------------
-tab_statement, tab_trend, tab_manage = st.tabs(["📑 재무제표", "📈 추이 차트", "🗂 데이터 관리"])
+tab_statement, tab_trend, tab_compare, tab_manage = st.tabs(
+    ["📑 재무제표", "📈 추이 차트", "🆚 회사 간 비교", "🗂 데이터 관리"]
+)
 
 with tab_statement:
     col_a, col_b, col_d = st.columns([2, 1.5, 1])
@@ -364,6 +368,70 @@ with tab_trend:
                     use_container_width=True,
                     hide_index=True,
                 )
+
+with tab_compare:
+    st.caption("여러 회사의 연간(사업보고서/감사보고서) 실적을 한 화면에서 비교합니다. 분기 데이터는 회사마다 보유 현황이 달라 제외했습니다.")
+
+    col_cc, col_cfs = st.columns([3, 1])
+    with col_cc:
+        compare_corps = st.multiselect("비교할 회사", WATCHLIST, default=WATCHLIST, key="compare_corps")
+    with col_cfs:
+        compare_fs_div = st.selectbox(
+            "재무제표 구분", list(FS_DIVISIONS.keys()), format_func=lambda k: FS_DIVISIONS[k], key="compare_fs_div"
+        )
+
+    if not compare_corps:
+        st.info("비교할 회사를 하나 이상 선택해주세요.")
+    else:
+        items_by_corp = {
+            c: expand_with_audit_history(db.get_all_line_items(c)) for c in compare_corps
+        }
+        items_by_corp = {c: v for c, v in items_by_corp.items() if not v.empty}
+        cmp_df = build_comparison_table(items_by_corp, compare_fs_div)
+
+        if cmp_df.empty:
+            st.info(f"선택한 회사들의 {FS_DIVISIONS[compare_fs_div]} 연간 데이터가 없습니다.")
+        else:
+            cmp_df = add_derived_ratios(cmp_df)
+
+            col_metric, col_view = st.columns(2)
+            with col_metric:
+                cmp_metric = st.radio("지표", ["매출액", "영업이익", "당기순이익"], horizontal=True, key="cmp_metric")
+            with col_view:
+                cmp_view = st.radio(
+                    "보기 방식", ["금액", "영업이익률(%)", "전년대비 성장률(%)"], horizontal=True, key="cmp_view"
+                )
+
+            if cmp_view == "금액":
+                plot_df = cmp_df[["회사", "연도", cmp_metric]].dropna().rename(columns={cmp_metric: "값"})
+                plot_df, cmp_unit = scale_for_chart(plot_df, "값")
+                y_title = f"{cmp_metric} ({cmp_unit})"
+                chart_title = f"회사별 {cmp_metric} 비교 (단위: {cmp_unit})"
+            elif cmp_view == "영업이익률(%)":
+                plot_df = cmp_df[["회사", "연도", "영업이익률(%)"]].dropna().rename(columns={"영업이익률(%)": "값"})
+                y_title = "영업이익률 (%)"
+                chart_title = "회사별 영업이익률 비교"
+            else:
+                col_name = f"{cmp_metric} 성장률(%)"
+                plot_df = cmp_df[["회사", "연도", col_name]].dropna().rename(columns={col_name: "값"})
+                y_title = f"{cmp_metric} 전년대비 성장률 (%)"
+                chart_title = f"회사별 {cmp_metric} 성장률 비교"
+
+            if plot_df.empty:
+                st.info("표시할 데이터가 없습니다 (성장률은 최소 2개 연도가 있어야 계산됩니다).")
+            else:
+                cmp_fig = px.bar(plot_df, x="연도", y="값", color="회사", barmode="group", title=chart_title)
+                cmp_fig.update_yaxes(title=y_title)
+                st.plotly_chart(cmp_fig, use_container_width=True)
+
+            st.dataframe(
+                cmp_df[["회사", "연도", "매출액", "영업이익", "당기순이익", "영업이익률(%)"]]
+                .style.format({
+                    "매출액": "{:,.0f}", "영업이익": "{:,.0f}", "당기순이익": "{:,.0f}", "영업이익률(%)": "{:.1f}",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 with tab_manage:
     st.caption("가져온 원본 데이터(raw data) 자체를 조회/삭제/내보내기 하는 관리 화면입니다.")

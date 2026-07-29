@@ -168,6 +168,38 @@ def build_key_metrics(items: pd.DataFrame, fs_div: str) -> pd.DataFrame:
     return df[sorted(df.columns, reverse=True)]
 
 
+def build_comparison_table(items_by_corp: dict[str, pd.DataFrame], fs_div: str) -> pd.DataFrame:
+    """여러 회사의 연간(사업보고서/감사보고서) 핵심 지표를 하나의 long-format 표로 합친다.
+    분기 데이터는 회사마다 보유 현황이 들쭉날쭉해서, 모든 회사가 공통으로 가진 연간 데이터만 비교한다."""
+    rows = []
+    for corp_name, items in items_by_corp.items():
+        km = build_key_metrics(items, fs_div)
+        if km.empty:
+            continue
+        for period in km.columns:
+            year, _, reprt = period.partition(" ")
+            if reprt not in ("사업보고서", "감사보고서"):
+                continue
+            row = {"회사": corp_name, "연도": year}
+            for metric in km.index:
+                row[metric] = km.loc[metric, period]
+            rows.append(row)
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(["회사", "연도"]).reset_index(drop=True)
+
+
+def add_derived_ratios(df: pd.DataFrame) -> pd.DataFrame:
+    """영업이익률과 전년대비 성장률(%)을 계산해 컬럼으로 추가한다. df는 [회사, 연도, 매출액, 영업이익, 당기순이익] 형태."""
+    df = df.copy()
+    if "매출액" in df and "영업이익" in df:
+        df["영업이익률(%)"] = df["영업이익"] / df["매출액"] * 100
+    for metric in ("매출액", "영업이익", "당기순이익"):
+        if metric in df:
+            df[f"{metric} 성장률(%)"] = df.groupby("회사")[metric].pct_change() * 100
+    return df
+
+
 # DART가 보고서 종류별로 주는 thstrm_amount의 성격이 통계 종류마다 다르다 (실측으로 확인됨):
 #   - 손익계산서/포괄손익계산서: 1분기·반기·3분기보고서 값 자체가 이미 "그 분기만의" 단독 값이다
 #     (예: 삼성전자 2025 매출액 1분기 79.1조 / 반기 74.6조 / 3분기 86.1조 — 누적이라면 반기가 1분기보다
