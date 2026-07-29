@@ -33,6 +33,12 @@ from statement_utils import (
 
 FLOW_SJ_NM = {"손익계산서", "포괄손익계산서", "현금흐름표"}
 
+# "회사 간 비교" 차트에서 회사별로 고정할 색상 (지정 안 된 회사는 Plotly 기본 팔레트가 자동 배정)
+COMPANY_COLORS = {
+    "SK하이닉스": "#FF8C00",  # 주황색
+    "삼성전자": "#0047AB",   # 코발트블루
+}
+
 
 def format_listing_date(raw: str | None) -> str | None:
     if not raw or len(raw) != 8:
@@ -472,7 +478,10 @@ with tab_compare:
             if plot_df.empty:
                 st.info("표시할 데이터가 없습니다 (성장률은 최소 2개 연도가 있어야 계산됩니다).")
             else:
-                cmp_fig = px.bar(plot_df, x="연도", y="값", color="회사", barmode="group", title=chart_title)
+                cmp_fig = px.bar(
+                    plot_df, x="연도", y="값", color="회사", barmode="group", title=chart_title,
+                    color_discrete_map=COMPANY_COLORS,
+                )
                 cmp_fig.update_yaxes(title=y_title)
                 st.plotly_chart(cmp_fig, use_container_width=True)
 
