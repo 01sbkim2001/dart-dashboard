@@ -22,9 +22,40 @@ from statement_utils import (
     build_quarterly_key_metrics,
     build_quarterly_pivot,
     build_statement_pivot,
+    expand_with_audit_history,
     format_for_display,
     scale_for_chart,
 )
+
+
+def format_listing_date(raw: str | None) -> str | None:
+    if not raw or len(raw) != 8:
+        return None
+    return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+
+
+def chronological_order(values: list[str]) -> list[str]:
+    """'YYYY 보고서명' 형태 라벨들을 연도 오름차순으로 정렬한다 (연도 내부 순서는 그대로 유지)."""
+    return sorted(values, key=lambda v: v.split(" ")[0])
+
+
+def add_listing_vline(fig, categories: list[str], listing_date_raw: str | None) -> None:
+    """차트의 카테고리형 x축 위에, 상장일 이전/이후 경계에 점선을 그어준다.
+    categories는 차트에 그려진 순서(연도 오름차순)의 '연도 보고서' 라벨 목록."""
+    if not listing_date_raw:
+        return
+    listing_year = listing_date_raw[:4]
+    boundary_idx = None
+    for i, cat in enumerate(categories):
+        if cat.split(" ")[0] >= listing_year:
+            boundary_idx = i
+            break
+    if boundary_idx is None or boundary_idx == 0:
+        return
+    fig.add_vline(
+        x=boundary_idx - 0.5, line_dash="dash", line_color="gray",
+        annotation_text="상장", annotation_position="top",
+    )
 
 load_dotenv()
 db.init_db()
@@ -167,6 +198,13 @@ with tab_statement:
     if items.empty:
         st.info("이 회사의 저장된 데이터가 없습니다. 왼쪽 사이드바에서 먼저 데이터를 가져와주세요.")
     else:
+        items = expand_with_audit_history(items)
+
+        listing_date_raw = db.get_company_meta(stmt_corp)
+        listing_date_display = format_listing_date(listing_date_raw)
+        if listing_date_display:
+            st.caption(f"📌 상장일: {listing_date_display} (DART 증권발행실적보고서 기준) — 이전 연도는 상장 전 감사보고서의 비교재무제표에서 가져왔습니다.")
+
         available_fs = [f for f in FS_DIVISIONS if f in items["fs_div"].unique()]
         with col_b:
             stmt_fs_div = st.selectbox(
@@ -194,12 +232,16 @@ with tab_statement:
 
                     chart_df = km_selected.reset_index().melt(id_vars="index", var_name="기간", value_name="금액")
                     chart_df = chart_df.rename(columns={"index": "지표"})
+                    period_order = chronological_order(km_selected.columns.tolist())
+                    chart_df["기간"] = pd.Categorical(chart_df["기간"], categories=period_order, ordered=True)
+                    chart_df = chart_df.sort_values("기간")
                     chart_df, chart_unit = scale_for_chart(chart_df, "금액")
                     fig = px.bar(
                         chart_df, x="기간", y="금액", color="지표", barmode="group",
                         title=f"{stmt_corp} 매출액 · 영업이익 · 당기순이익 추이 (단위: {chart_unit})",
                     )
                     fig.update_yaxes(title=f"금액 ({chart_unit})")
+                    add_listing_vline(fig, period_order, listing_date_raw)
                     st.plotly_chart(fig, use_container_width=True)
             st.divider()
 
@@ -226,6 +268,9 @@ with tab_statement:
 
                     q_chart_df = qkm_selected.reset_index().melt(id_vars="index", var_name="분기", value_name="금액")
                     q_chart_df = q_chart_df.rename(columns={"index": "지표"})
+                    q_period_order = chronological_order(qkm_selected.columns.tolist())
+                    q_chart_df["분기"] = pd.Categorical(q_chart_df["분기"], categories=q_period_order, ordered=True)
+                    q_chart_df = q_chart_df.sort_values("분기")
                     q_chart_df, q_chart_unit = scale_for_chart(q_chart_df, "금액")
                     q_fig = px.bar(
                         q_chart_df, x="분기", y="금액", color="지표", barmode="group",
@@ -277,6 +322,13 @@ with tab_trend:
     if all_items.empty:
         st.info("이 회사의 저장된 데이터가 없습니다.")
     else:
+        all_items = expand_with_audit_history(all_items)
+
+        trend_listing_raw = db.get_company_meta(trend_corp)
+        trend_listing_display = format_listing_date(trend_listing_raw)
+        if trend_listing_display:
+            st.caption(f"📌 상장일: {trend_listing_display} (DART 증권발행실적보고서 기준) — 이전 연도는 상장 전 감사보고서의 비교재무제표에서 가져왔습니다.")
+
         account_options = sorted(all_items["account_nm"].dropna().unique().tolist())
         default_idx = account_options.index("매출액") if "매출액" in account_options else 0
         account = st.selectbox("계정과목", account_options, index=default_idx)
@@ -298,12 +350,14 @@ with tab_trend:
                 st.info("오른쪽에서 비교할 기간을 하나 이상 선택해주세요.")
             else:
                 filtered_subset = subset[subset["연도/보고서"].isin(trend_periods)]
+                filtered_periods_order = filtered_subset["연도/보고서"].drop_duplicates().tolist()
                 chart_subset, trend_unit = scale_for_chart(filtered_subset, "금액")
                 fig = px.bar(
                     chart_subset, x="연도/보고서", y="금액", color="sj_nm",
                     title=f"{trend_corp} - {account} (단위: {trend_unit})",
                 )
                 fig.update_yaxes(title=f"금액 ({trend_unit})")
+                add_listing_vline(fig, filtered_periods_order, trend_listing_raw)
                 st.plotly_chart(fig, use_container_width=True)
                 st.dataframe(
                     filtered_subset[["bsns_year", "reprt_name", "sj_nm", "account_nm", "금액"]],

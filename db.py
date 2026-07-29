@@ -42,6 +42,12 @@ CREATE TABLE IF NOT EXISTS financial_line_items (
     ord TEXT,
     currency TEXT
 );
+
+CREATE TABLE IF NOT EXISTS company_meta (
+    corp_name TEXT PRIMARY KEY,
+    listing_date TEXT,
+    checked_at TEXT NOT NULL
+);
 """
 
 
@@ -181,5 +187,30 @@ def delete_fetch(fetch_id: int) -> None:
     try:
         conn.execute("DELETE FROM fetch_log WHERE id = ?", (fetch_id,))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def save_company_meta(corp_name: str, listing_date: str | None) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO company_meta (corp_name, listing_date, checked_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(corp_name) DO UPDATE SET listing_date=excluded.listing_date, checked_at=excluded.checked_at""",
+            (corp_name, listing_date, datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_company_meta(corp_name: str) -> str | None:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT listing_date FROM company_meta WHERE corp_name = ?", (corp_name,)
+        ).fetchone()
+        return row[0] if row else None
     finally:
         conn.close()

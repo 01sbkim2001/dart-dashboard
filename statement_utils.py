@@ -35,6 +35,35 @@ def amount_to_number(s: str | None) -> float | None:
         return None
 
 
+def expand_with_audit_history(items: pd.DataFrame) -> pd.DataFrame:
+    """사업보고서에는 전기(frmtrm)·전전기(bfefrmtrm) 비교재무제표가 함께 실린다.
+    이 비교 수치는 그 해의 감사보고서를 바탕으로 한 값이라, 상장 전이라 별도로 수집하지 못한
+    과거 연도를 이걸로 보완한다 (이미 별도로 수집된 연도는 건드리지 않는다)."""
+    if items.empty:
+        return items
+    annual = items[items["reprt_name"] == "사업보고서"].copy()
+    if annual.empty:
+        return items
+
+    existing_years = set(items["bsns_year"].unique())
+
+    extra_frames = []
+    for offset, amt_col in [(1, "frmtrm_amount"), (2, "bfefrmtrm_amount")]:
+        candidate = annual.copy()
+        candidate["bsns_year"] = (candidate["bsns_year"].astype(int) - offset).astype(str)
+        candidate = candidate[~candidate["bsns_year"].isin(existing_years)]
+        candidate = candidate[candidate[amt_col].notna() & (candidate[amt_col] != "")]
+        if candidate.empty:
+            continue
+        candidate["thstrm_amount"] = candidate[amt_col]
+        candidate["reprt_name"] = "감사보고서"
+        extra_frames.append(candidate)
+
+    if not extra_frames:
+        return items
+    return pd.concat([items] + extra_frames, ignore_index=True)
+
+
 def filter_to_reported_period(df: pd.DataFrame) -> pd.DataFrame:
     """DART가 사업/반기/분기 보고서 조회 시 다른 기간의 비교값을 같은 계정에 섞어 보내는 경우가 있어,
     실제로 요청한 보고서 기간(thstrm_nm)에 해당하는 행만 남긴다."""

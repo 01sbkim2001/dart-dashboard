@@ -107,3 +107,42 @@ class DartClient:
         if data.get("status") != "000":
             raise DartApiError(f"DART API 오류 [{data.get('status')}]: {data.get('message')}")
         return data
+
+    def find_listing_date(self, corp_code: str) -> str | None:
+        """공시 이력에서 '증권발행실적보고서'(IPO 직후 제출)를 찾아 상장일의 근사치로 사용한다.
+        이미 오래전부터 정기공시(사업/분기/반기보고서)를 내고 있던 회사라면, 그 '증권발행실적보고서'는
+        IPO가 아니라 나중의 회사채·유상증자 등일 가능성이 높으므로 무시한다.
+        DART 전자공시가 시작되기 훨씬 전에 상장한 오래된 회사는 어차피 찾지 못한다 (None 반환)."""
+        resp = self._get(
+            "list.json", corp_code=corp_code, bgn_de="19990101", page_count="100", page_no="1"
+        )
+        data = resp.json()
+        if data.get("status") != "000":
+            return None
+        candidates = [
+            item for item in data.get("list", [])
+            if "증권발행실적보고서" in item.get("report_nm", "")
+        ]
+        if not candidates:
+            return None
+        earliest_issuance = min(candidates, key=lambda item: item.get("rcept_dt", "99999999"))
+        issuance_date = earliest_issuance.get("rcept_dt")
+
+        # 정기공시 이력 중 가장 오래된 날짜와 비교해, 시기가 비슷할 때만(=신규 상장) 신뢰한다.
+        resp2 = self._get(
+            "list.json", corp_code=corp_code, bgn_de="19990101", pblntf_ty="A", page_count="100", page_no="1"
+        )
+        data2 = resp2.json()
+        periodic_dates = [item.get("rcept_dt") for item in data2.get("list", []) if item.get("rcept_dt")]
+        if not periodic_dates:
+            return None
+        earliest_periodic = min(periodic_dates)
+
+        from datetime import datetime as _dt
+        try:
+            gap_days = abs((_dt.strptime(issuance_date, "%Y%m%d") - _dt.strptime(earliest_periodic, "%Y%m%d")).days)
+        except (ValueError, TypeError):
+            return None
+        if gap_days > 400:
+            return None
+        return issuance_date
