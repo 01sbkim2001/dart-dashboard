@@ -210,10 +210,19 @@ CUMULATIVE_SJ_NM = {"현금흐름표"}
 
 
 def _standalone_quarter_columns(cum: dict[str, float], years: list[str]) -> dict[str, float]:
-    """손익계산서류: 보고서 값 자체가 분기 단독값. 4분기만 연간 - (1~3분기)로 역산한다."""
+    """손익계산서류: 보고서 값 자체가 분기 단독값. 4분기만 연간 - (1~3분기)로 역산한다.
+    정식 보고서가 아직 안 나온 경우, 회사가 미리 낸 '영업(잠정)실적' 공정공시로 대신 채운다."""
     row: dict[str, float] = {}
     for y in years:
-        q1, q2, q3 = cum.get((y, "1분기보고서")), cum.get((y, "반기보고서")), cum.get((y, "3분기보고서"))
+        q1 = cum.get((y, "1분기보고서"))
+        if q1 is None:
+            q1 = cum.get((y, "1분기 잠정실적"))
+        q2 = cum.get((y, "반기보고서"))
+        if q2 is None:
+            q2 = cum.get((y, "2분기 잠정실적"))
+        q3 = cum.get((y, "3분기보고서"))
+        if q3 is None:
+            q3 = cum.get((y, "3분기 잠정실적"))
         annual = cum.get((y, "사업보고서"))
         if q1 is not None:
             row[f"{y} 1분기"] = q1
