@@ -40,9 +40,32 @@ def format_listing_date(raw: str | None) -> str | None:
     return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
 
 
+# 같은 연도 안에서 1분기 -> 반기 -> 3분기 -> 4분기(계산) -> 연간(사업보고서) 순으로 정렬하기 위한 순위표
+REPRT_TYPE_ORDER = {
+    "1분기보고서": 0,
+    "1분기 잠정실적": 0,
+    "반기보고서": 1,
+    "2분기 잠정실적": 1,
+    "3분기보고서": 2,
+    "3분기 잠정실적": 2,
+    "4분기(계산)": 3,
+    "4분기 잠정실적": 3,
+    "사업보고서": 4,
+    "감사보고서": 4,
+}
+
+
+def reprt_sort_key(reprt_name: str) -> int:
+    return REPRT_TYPE_ORDER.get(reprt_name, 99)
+
+
 def chronological_order(values: list[str]) -> list[str]:
-    """'YYYY 보고서명' 형태 라벨들을 연도 오름차순으로 정렬한다 (연도 내부 순서는 그대로 유지)."""
-    return sorted(values, key=lambda v: v.split(" ")[0])
+    """'YYYY 보고서명' 형태 라벨들을 연도 오름차순 -> 같은 연도 안에서는
+    1분기->반기->3분기->4분기(계산)->사업보고서 순으로 정렬한다."""
+    def key(v: str):
+        year, _, reprt = v.partition(" ")
+        return (year, reprt_sort_key(reprt))
+    return sorted(values, key=key)
 
 
 def add_listing_vline(fig, categories: list[str], listing_date_raw: str | None) -> None:
@@ -340,9 +363,14 @@ with tab_trend:
         default_idx = account_options.index("매출액") if "매출액" in account_options else 0
         account = st.selectbox("계정과목", account_options, index=default_idx)
 
+        def _reprt_sort_col(col: pd.Series) -> pd.Series:
+            if col.name == "reprt_name":
+                return col.map(reprt_sort_key)
+            return col
+
         subset = all_items[all_items["account_nm"] == account].copy()
         subset["금액"] = subset["thstrm_amount"].apply(amount_to_number)
-        subset = subset.sort_values(["bsns_year", "reprt_name"])
+        subset = subset.sort_values(["bsns_year", "reprt_name"], key=_reprt_sort_col)
         subset["연도/보고서"] = subset["bsns_year"] + " " + subset["reprt_name"]
 
         # ---- 4분기(계산값): 사업보고서(연간)에서 1·2·3분기를 뺀 값을 별도 옵션으로 추가 ----
@@ -364,7 +392,7 @@ with tab_trend:
                 })
         if q4_rows:
             subset = pd.concat([subset, pd.DataFrame(q4_rows)], ignore_index=True)
-            subset = subset.sort_values(["bsns_year", "reprt_name"])
+            subset = subset.sort_values(["bsns_year", "reprt_name"], key=_reprt_sort_col)
 
         trend_periods_all = subset["연도/보고서"].drop_duplicates().tolist()
 
