@@ -39,6 +39,11 @@ COMPANY_COLORS = {
     "삼성전자": "#0047AB",   # 코발트블루
 }
 
+# DART 공식 데이터가 아니라 증권사 리서치 리포트에서 수동으로 뽑은 추정치임을 표시하는 sj_nm.
+# "전체 재무제표" 원본 표에는 안 섞이게 제외하고, 추이 차트에서는 초록색으로 구분해서 보여준다.
+ESTIMATE_SJ_NM = "증권사추정"
+TREND_SJ_NM_COLORS = {ESTIMATE_SJ_NM: "#2ECC71"}
+
 
 def format_listing_date(raw: str | None) -> str | None:
     if not raw or len(raw) != 8:
@@ -319,6 +324,7 @@ with tab_statement:
 
         # ---- 재무제표 종류별 전체 표 (재무상태표 / 손익계산서 / 현금흐름표 등 전부) ----
         available_sj = items.loc[items["fs_div"] == stmt_fs_div, "sj_nm"].dropna().unique().tolist()
+        available_sj = [s for s in available_sj if s != ESTIMATE_SJ_NM]  # 증권사 추정치는 여기 안 섞음
         preferred_order = ["재무상태표", "손익계산서", "포괄손익계산서", "현금흐름표", "자본변동표"]
         available_sj = sorted(available_sj, key=lambda s: preferred_order.index(s) if s in preferred_order else 99)
 
@@ -417,6 +423,7 @@ with tab_trend:
                 fig = px.bar(
                     chart_subset, x="연도/보고서", y="금액", color="sj_nm",
                     title=f"{trend_corp} - {account} (단위: {trend_unit})",
+                    color_discrete_map=TREND_SJ_NM_COLORS,
                 )
                 fig.update_yaxes(title=f"금액 ({trend_unit})")
                 add_listing_vline(fig, filtered_periods_order, trend_listing_raw)
