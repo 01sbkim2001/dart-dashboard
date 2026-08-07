@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 import pandas as pd
 import plotly.express as px
@@ -40,9 +41,10 @@ COMPANY_COLORS = {
 }
 
 # DART 공식 데이터가 아니라 증권사 리서치 리포트에서 수동으로 뽑은 추정치임을 표시하는 sj_nm.
-# "전체 재무제표" 원본 표에는 안 섞이게 제외하고, 추이 차트에서는 초록색으로 구분해서 보여준다.
+# "전체 재무제표" 원본 표나 추이 차트에는 안 섞이게 빼고, "분기 실적 컨센서스" 탭에만 모아서 보여준다.
 ESTIMATE_SJ_NM = "증권사추정"
-TREND_SJ_NM_COLORS = {ESTIMATE_SJ_NM: "#2ECC71"}
+CONSENSUS_COLOR = "#2ECC71"
+CONSENSUS_AVG_COLOR = "#1B4332"
 
 
 def format_listing_date(raw: str | None) -> str | None:
@@ -226,8 +228,8 @@ with st.sidebar:
 
 
 # ---------------- 메인 ----------------
-tab_statement, tab_trend, tab_compare, tab_manage = st.tabs(
-    ["📑 재무제표", "📈 추이 차트", "🆚 회사 간 비교", "🗂 데이터 관리"]
+tab_statement, tab_trend, tab_consensus, tab_compare, tab_manage = st.tabs(
+    ["📑 재무제표", "📈 추이 차트", "📮 분기 실적 컨센서스", "🆚 회사 간 비교", "🗂 데이터 관리"]
 )
 
 with tab_statement:
@@ -364,6 +366,7 @@ with tab_trend:
     if all_items.empty:
         st.info("이 회사의 저장된 데이터가 없습니다.")
     else:
+        all_items = all_items[all_items["sj_nm"] != ESTIMATE_SJ_NM]  # 증권사 추정치는 컨센서스 탭에서만
         all_items = expand_with_audit_history(all_items)
 
         trend_listing_raw = db.get_company_meta(trend_corp)
@@ -423,7 +426,6 @@ with tab_trend:
                 fig = px.bar(
                     chart_subset, x="연도/보고서", y="금액", color="sj_nm",
                     title=f"{trend_corp} - {account} (단위: {trend_unit})",
-                    color_discrete_map=TREND_SJ_NM_COLORS,
                 )
                 fig.update_yaxes(title=f"금액 ({trend_unit})")
                 add_listing_vline(fig, filtered_periods_order, trend_listing_raw)
@@ -433,6 +435,72 @@ with tab_trend:
                     use_container_width=True,
                     hide_index=True,
                 )
+
+with tab_consensus:
+    st.caption(
+        "정식 분기·반기보고서가 나오기 전, 증권사 리서치 리포트에서 뽑은 실적 추정치를 모아봅니다. "
+        "DART 공식 데이터가 아니라 수동으로 입력한 값입니다."
+    )
+    cons_corp = st.selectbox("회사", WATCHLIST, key="consensus_corp")
+    cons_items = db.get_all_line_items(cons_corp)
+    cons_items = cons_items[cons_items["sj_nm"] == ESTIMATE_SJ_NM].copy()
+
+    if cons_items.empty:
+        st.info("이 회사의 증권사 추정치가 아직 없습니다.")
+    else:
+        def _split_reprt_name(reprt_name: str) -> tuple[str, str]:
+            m = re.match(r"^(.+?)\((.+)\)$", reprt_name or "")
+            return (m.group(1), m.group(2)) if m else (reprt_name, "")
+
+        def _extract_pub_date(thstrm_nm: str) -> str:
+            m = re.search(r"(\d{4}-\d{2}-\d{2})", thstrm_nm or "")
+            return m.group(1) if m else ""
+
+        split = cons_items["reprt_name"].apply(_split_reprt_name)
+        cons_items["기간"] = split.apply(lambda t: t[0])
+        cons_items["증권사"] = split.apply(lambda t: t[1])
+        cons_items["발간일"] = cons_items["thstrm_nm"].apply(_extract_pub_date)
+        cons_items["금액"] = cons_items["thstrm_amount"].apply(amount_to_number)
+
+        period_options = sorted(cons_items["기간"].dropna().unique().tolist(), reverse=True)
+        cons_period = st.selectbox("기간", period_options, key="consensus_period")
+        period_df = cons_items[cons_items["기간"] == cons_period]
+
+        metric_options = [m for m in ["매출액", "영업이익", "당기순이익"] if m in period_df["account_nm"].unique()]
+        cons_metric = st.radio("지표", metric_options, horizontal=True, key="consensus_metric")
+
+        metric_df = period_df[period_df["account_nm"] == cons_metric][["증권사", "금액", "발간일"]].sort_values("증권사")
+
+        if metric_df.empty:
+            st.info("이 지표에 대한 증권사 추정치가 없습니다.")
+        else:
+            avg_val = metric_df["금액"].mean()
+            chart_df = pd.concat(
+                [metric_df[["증권사", "금액"]], pd.DataFrame([{"증권사": "컨센서스(평균)", "금액": avg_val}])],
+                ignore_index=True,
+            )
+            chart_df, cons_unit = scale_for_chart(chart_df, "금액")
+            is_avg = chart_df["증권사"].eq("컨센서스(평균)")
+            chart_df["구분"] = is_avg.map({True: "컨센서스(평균)", False: "개별 증권사"})
+            cons_fig = px.bar(
+                chart_df, x="증권사", y="금액", color="구분",
+                color_discrete_map={"개별 증권사": CONSENSUS_COLOR, "컨센서스(평균)": CONSENSUS_AVG_COLOR},
+                title=f"{cons_corp} {cons_period} {cons_metric} 증권사별 추정치 (단위: {cons_unit})",
+            )
+            cons_fig.update_yaxes(title=f"{cons_metric} ({cons_unit})")
+            st.plotly_chart(cons_fig, use_container_width=True)
+
+            st.dataframe(
+                metric_df.assign(**{f"{cons_metric}(원)": metric_df["금액"].map(lambda v: f"{v:,.0f}")})
+                .drop(columns="금액")[["증권사", f"{cons_metric}(원)", "발간일"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        st.subheader(f"{cons_period} 전체 지표 요약")
+        summary = period_df.pivot_table(index="증권사", columns="account_nm", values="금액", aggfunc="first")
+        summary_cols = [c for c in ["매출액", "영업이익", "당기순이익"] if c in summary.columns]
+        st.dataframe(format_for_display(summary[summary_cols], "억원"), use_container_width=True)
 
 with tab_compare:
     st.caption("여러 회사의 연간(사업보고서/감사보고서) 실적을 한 화면에서 비교합니다. 분기 데이터는 회사마다 보유 현황이 달라 제외했습니다.")
