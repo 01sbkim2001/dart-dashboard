@@ -44,7 +44,6 @@ COMPANY_COLORS = {
 # "전체 재무제표" 원본 표나 추이 차트에는 안 섞이게 빼고, "분기 실적 컨센서스" 탭에만 모아서 보여준다.
 ESTIMATE_SJ_NM = "증권사추정"
 CONSENSUS_COLOR = "#2ECC71"
-CONSENSUS_AVG_COLOR = "#1B4332"
 
 
 def format_listing_date(raw: str | None) -> str | None:
@@ -475,19 +474,22 @@ with tab_consensus:
             st.info("이 지표에 대한 증권사 추정치가 없습니다.")
         else:
             avg_val = metric_df["금액"].mean()
-            chart_df = pd.concat(
-                [metric_df[["증권사", "금액"]], pd.DataFrame([{"증권사": "컨센서스(평균)", "금액": avg_val}])],
-                ignore_index=True,
-            )
+            chart_df = metric_df[["증권사", "금액"]].copy()
             chart_df, cons_unit = scale_for_chart(chart_df, "금액")
-            is_avg = chart_df["증권사"].eq("컨센서스(평균)")
-            chart_df["구분"] = is_avg.map({True: "컨센서스(평균)", False: "개별 증권사"})
+            avg_scaled = chart_df["금액"].mean()
+
             cons_fig = px.bar(
-                chart_df, x="증권사", y="금액", color="구분",
-                color_discrete_map={"개별 증권사": CONSENSUS_COLOR, "컨센서스(평균)": CONSENSUS_AVG_COLOR},
+                chart_df, x="증권사", y="금액",
                 title=f"{cons_corp} {cons_period} {cons_metric} 증권사별 추정치 (단위: {cons_unit})",
             )
+            cons_fig.update_traces(marker_color=CONSENSUS_COLOR)
+            cons_fig.add_hline(
+                y=avg_scaled, line_color="red", line_width=2,
+                annotation_text=f"컨센서스(평균) {avg_scaled:,.2f}{cons_unit}", annotation_position="top left",
+            )
             cons_fig.update_yaxes(title=f"{cons_metric} ({cons_unit})")
+            if cons_unit == "조원":
+                cons_fig.update_yaxes(dtick=0.1)
             st.plotly_chart(cons_fig, use_container_width=True)
 
             st.dataframe(
