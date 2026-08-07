@@ -483,13 +483,14 @@ with tab_consensus:
                 title=f"{cons_corp} {cons_period} {cons_metric} 증권사별 추정치 (단위: {cons_unit})",
             )
             cons_fig.update_traces(marker_color=CONSENSUS_COLOR)
+            cons_fig.update_layout(bargap=0.6)  # 막대 너비를 절반 정도로 줄임
             cons_fig.add_hline(
                 y=avg_scaled, line_color="red", line_width=2,
                 annotation_text=f"컨센서스(평균) {avg_scaled:,.2f}{cons_unit}", annotation_position="top left",
             )
             cons_fig.update_yaxes(title=f"{cons_metric} ({cons_unit})")
             if cons_unit == "조원":
-                cons_fig.update_yaxes(dtick=0.1)
+                cons_fig.update_yaxes(dtick=0.1, range=[0, 2.5])
             st.plotly_chart(cons_fig, use_container_width=True)
 
             st.dataframe(
