@@ -1,9 +1,12 @@
 """로컬 SQLite에 DART 원본 응답과 파싱된 재무제표 라인아이템을 누적 저장한다."""
 from __future__ import annotations
 
+import html
 import json
+import re
 import sqlite3
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import pandas as pd
@@ -47,6 +50,17 @@ CREATE TABLE IF NOT EXISTS company_meta (
     corp_name TEXT PRIMARY KEY,
     listing_date TEXT,
     checked_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS keyword_news (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    keyword TEXT NOT NULL,
+    title TEXT NOT NULL,
+    link TEXT NOT NULL,
+    description TEXT,
+    pub_date TEXT,
+    fetched_at TEXT NOT NULL,
+    UNIQUE(keyword, link)
 );
 """
 
@@ -212,5 +226,64 @@ def get_company_meta(corp_name: str) -> str | None:
             "SELECT listing_date FROM company_meta WHERE corp_name = ?", (corp_name,)
         ).fetchone()
         return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def _clean_naver_text(s: str | None) -> str:
+    """네이버 검색 API 결과의 <b> 강조 태그와 HTML 엔티티(&quot; 등)를 제거한다."""
+    return re.sub(r"</?b>", "", html.unescape(s or ""))
+
+
+def _normalize_pub_date(raw: str | None) -> str:
+    """네이버 뉴스 API의 RFC 822 pubDate(예: 'Mon, 10 Aug 2026 09:00:00 +0900')를
+    정렬 가능한 ISO 형식으로 바꾼다. 파싱 실패 시 원본 문자열을 그대로 둔다."""
+    if not raw:
+        return ""
+    try:
+        return parsedate_to_datetime(raw).isoformat()
+    except (ValueError, TypeError):
+        return raw
+
+
+def save_news_items(keyword: str, items: list[dict]) -> int:
+    """키워드별 뉴스 검색 결과를 저장한다. items: [{"title", "link", "description", "pub_date"}, ...]
+    같은 (keyword, link) 조합은 UNIQUE 제약으로 중복 삽입되지 않는다. 반환값은 실제로 새로 저장된 건수."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        inserted = 0
+        for it in items:
+            cur.execute(
+                """INSERT OR IGNORE INTO keyword_news
+                   (keyword, title, link, description, pub_date, fetched_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    keyword,
+                    _clean_naver_text(it.get("title")),
+                    it.get("link", ""),
+                    _clean_naver_text(it.get("description")),
+                    _normalize_pub_date(it.get("pub_date")),
+                    datetime.now().isoformat(timespec="seconds"),
+                ),
+            )
+            if cur.rowcount:
+                inserted += 1
+        conn.commit()
+        return inserted
+    finally:
+        conn.close()
+
+
+def get_news(keyword: str | None = None) -> pd.DataFrame:
+    conn = get_connection()
+    try:
+        query = "SELECT keyword, title, link, description, pub_date, fetched_at FROM keyword_news"
+        params = ()
+        if keyword:
+            query += " WHERE keyword = ?"
+            params = (keyword,)
+        query += " ORDER BY pub_date DESC"
+        return pd.read_sql_query(query, conn, params=params)
     finally:
         conn.close()

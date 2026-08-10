@@ -227,8 +227,10 @@ with st.sidebar:
 
 
 # ---------------- 메인 ----------------
-tab_statement, tab_trend, tab_consensus, tab_compare, tab_manage = st.tabs(
-    ["📑 재무제표", "📈 추이 차트", "📮 분기 실적 컨센서스", "🆚 회사 간 비교", "🗂 데이터 관리"]
+NEWS_KEYWORDS = ["데이터센터", "클라우드", "CSP"]
+
+tab_statement, tab_trend, tab_consensus, tab_compare, tab_manage, tab_news = st.tabs(
+    ["📑 재무제표", "📈 추이 차트", "📮 분기 실적 컨센서스", "🆚 회사 간 비교", "🗂 데이터 관리", "🗞 키워드별 뉴스"]
 )
 
 with tab_statement:
@@ -621,3 +623,26 @@ with tab_manage:
             conn.close()
             if not raw_json.empty:
                 st.json(raw_json.iloc[0]["raw_json"])
+
+with tab_news:
+    st.caption(
+        "DART 재무 데이터와는 무관한 별도 기능입니다. 매일 아침 8시, "
+        f"{' · '.join(NEWS_KEYWORDS)} 키워드가 들어간 최신 뉴스를 네이버 뉴스에서 자동으로 모아옵니다."
+    )
+    news_keyword = st.radio("키워드", ["전체"] + NEWS_KEYWORDS, horizontal=True, key="news_keyword")
+    news_df = db.get_news(None if news_keyword == "전체" else news_keyword)
+
+    if news_df.empty:
+        st.info("아직 수집된 뉴스가 없습니다. 매일 아침 8시 자동 수집을 기다려주세요.")
+    else:
+        news_df["표시일시"] = pd.to_datetime(news_df["pub_date"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M")
+        news_df = news_df.sort_values("pub_date", ascending=False)
+        for _, row in news_df.iterrows():
+            st.markdown(f"**[{row['title']}]({row['link']})**")
+            meta = f"`{row['keyword']}`"
+            if row["표시일시"] and row["표시일시"] != "NaT":
+                meta += f" · {row['표시일시']}"
+            st.caption(meta)
+            if row["description"]:
+                st.write(row["description"])
+            st.divider()
