@@ -12,10 +12,10 @@ import db
 
 NEWS_KEYWORDS = ["데이터센터", "클라우드", "CSP"]
 
-st.set_page_config(page_title="키워드별 뉴스", page_icon="🗞", layout="wide")
+st.set_page_config(page_title="키워드별 뉴스", page_icon="📰", layout="wide")
 db.init_db()
 
-st.title("🗞 키워드별 뉴스")
+st.title("📰 키워드별 뉴스")
 st.caption(
     "DART 재무 데이터와는 무관한 별도 기능입니다. 매일 아침 8시, "
     f"{' · '.join(NEWS_KEYWORDS)} 키워드가 들어간 최신 뉴스를 네이버 뉴스에서 자동으로 모아옵니다."
