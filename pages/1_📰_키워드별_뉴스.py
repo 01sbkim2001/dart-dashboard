@@ -1,4 +1,4 @@
-"""데이터센터 · 클라우드 · CSP 키워드 뉴스.
+"""데이터센터 · 클라우드 · CSP · 아이폰 폴드 · 아이폰 울트라 키워드 뉴스.
 
 DART 재무제표 대시보드(app.py)와는 무관한 별도 페이지. 매일 아침 8시 스케줄 작업이
 네이버 뉴스에서 키워드별 최신 기사를 모아 keyword_news 테이블에 저장하면, 여기서 보여준다.
@@ -10,7 +10,7 @@ import streamlit as st
 
 import db
 
-NEWS_KEYWORDS = ["데이터센터", "클라우드", "CSP"]
+NEWS_KEYWORDS = ["데이터센터", "클라우드", "CSP", "아이폰 폴드", "아이폰 울트라"]
 
 st.set_page_config(page_title="키워드별 뉴스", page_icon="📰", layout="wide")
 db.init_db()
