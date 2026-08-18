@@ -478,6 +478,29 @@ with tab_consensus:
             chart_df, cons_unit = scale_for_chart(chart_df, "금액")
             avg_scaled = chart_df["금액"].mean()
 
+            # 추정치 기간("2Q26E" 등)에 대응하는 실제 실적(분기별 단독 실적)이 이미 공시됐으면 함께 보여준다.
+            def _parse_estimate_period(period: str) -> tuple[str, int] | None:
+                m = re.match(r"^(\d)Q(\d{2})E?$", period or "")
+                if not m:
+                    return None
+                quarter, yy = m.groups()
+                return f"20{yy}", int(quarter)
+
+            actual_scaled = None
+            parsed_period = _parse_estimate_period(cons_period)
+            if parsed_period:
+                actual_year, actual_quarter = parsed_period
+                actual_items = db.get_all_line_items(cons_corp)
+                actual_items = actual_items[actual_items["sj_nm"] != ESTIMATE_SJ_NM]
+                if not actual_items.empty:
+                    actual_fs_div = "CFS" if "CFS" in actual_items["fs_div"].unique() else actual_items["fs_div"].iloc[0]
+                    actual_quarterly = build_quarterly_key_metrics(actual_items, actual_fs_div)
+                    period_label = f"{actual_year} {actual_quarter}분기"
+                    if cons_metric in actual_quarterly.index and period_label in actual_quarterly.columns:
+                        raw_val = actual_quarterly.loc[cons_metric, period_label]
+                        if pd.notna(raw_val):
+                            actual_scaled = raw_val / UNIT_FACTORS[cons_unit]
+
             cons_fig = px.bar(
                 chart_df, x="증권사", y="금액",
                 title=f"{cons_corp} {cons_period} {cons_metric} 증권사별 추정치 (단위: {cons_unit})",
@@ -488,6 +511,11 @@ with tab_consensus:
                 y=avg_scaled, line_color="red", line_width=2,
                 annotation_text=f"컨센서스(평균) {avg_scaled:,.2f}{cons_unit}", annotation_position="top left",
             )
+            if actual_scaled is not None:
+                cons_fig.add_hline(
+                    y=actual_scaled, line_color="navy", line_width=2,
+                    annotation_text=f"실제 실적 {actual_scaled:,.2f}{cons_unit}", annotation_position="bottom right",
+                )
             cons_fig.update_yaxes(title=f"{cons_metric} ({cons_unit})")
             if cons_unit == "조원":
                 cons_fig.update_yaxes(dtick=0.1, range=[0, 2.5])
