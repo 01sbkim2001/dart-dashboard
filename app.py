@@ -373,16 +373,33 @@ with tab_trend:
         if trend_listing_display:
             st.caption(f"📌 상장일: {trend_listing_display} (DART 증권발행실적보고서 기준) — 이전 연도는 상장 전 감사보고서의 비교재무제표에서 가져왔습니다.")
 
-        account_options = sorted(all_items["account_nm"].dropna().unique().tolist())
-        default_idx = account_options.index("매출액") if "매출액" in account_options else 0
-        account = st.selectbox("계정과목", account_options, index=default_idx)
-
         def _reprt_sort_col(col: pd.Series) -> pd.Series:
             if col.name == "reprt_name":
                 return col.map(reprt_sort_key)
             return col
 
-        subset = all_items[all_items["account_nm"] == account].copy()
+        # 계정과목명(account_nm)은 같은 계정(account_id)이라도 회사/보고서 종류에 따라 다르게
+        # 표기될 수 있다 (예: SK텔레콤은 매출액을 정식 공시에서 "영업수익"이라 쓰는데, 잠정실적
+        # 공시에서만 "매출액"으로 표기됨). account_id 기준으로 묶고, 정식 공시(잠정실적 제외) 중
+        # 가장 최근에 쓰인 이름을 대표 이름으로 써야 텍스트만 다를 뿐인 같은 계정이 안 갈라진다.
+        all_items = all_items.assign(
+            _acct_key=all_items["account_id"].where(
+                all_items["account_id"].notna() & (all_items["account_id"] != ""), all_items["account_nm"]
+            )
+        )
+        official = all_items[~all_items["reprt_name"].str.contains("잠정실적", na=False)]
+        label_source = (official if not official.empty else all_items).sort_values(
+            ["bsns_year", "reprt_name"], key=_reprt_sort_col
+        )
+        label_map = label_source.groupby("_acct_key")["account_nm"].last()
+
+        account_options = sorted(label_map.unique().tolist())
+        default_label = label_map.get("ifrs-full_Revenue")
+        default_idx = account_options.index(default_label) if default_label in account_options else 0
+        account = st.selectbox("계정과목", account_options, index=default_idx)
+
+        selected_keys = label_map[label_map == account].index.tolist()
+        subset = all_items[all_items["_acct_key"].isin(selected_keys)].copy()
         subset["금액"] = subset["thstrm_amount"].apply(amount_to_number)
         subset = subset.sort_values(["bsns_year", "reprt_name"], key=_reprt_sort_col)
         subset["연도/보고서"] = subset["bsns_year"] + " " + subset["reprt_name"]
